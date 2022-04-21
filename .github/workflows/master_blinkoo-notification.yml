@@ -5,8 +5,8 @@ name: Build and deploy dotnet core project to Azure Function App - blinkoo-notif
 
 on:
   push:
-    branches:
-      - master
+    tags:
+      - 'prod*'
   workflow_dispatch:
 
 env:
