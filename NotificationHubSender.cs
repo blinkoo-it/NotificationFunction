@@ -3,91 +3,161 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
-using Microsoft.Azure.Cosmos;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.NotificationHubs;
 using Microsoft.Azure.WebJobs;
+using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using NotificationFunction.Dtos.Notifications;
 using NotificationFunction.Dtos.QueueMessages;
-using NotificationFunction.Models.UserInfo;
+using NotificationFunction.Dtos.Requests;
+using NotificationFunction.Helpers;
+using NotificationFunction.Models;
 using NotificationFunction.Services;
 
 namespace NotificationFunction
 {
     public class NotificationHubSender
     {
-        private ICosmosContainerService _cosmosContainerService;
         private IAzureNotificationHubService _azureNotificationHubService;
-        public NotificationHubSender(ICosmosContainerService cosmosContainerService, IAzureNotificationHubService azureNotificationHubService)
+        private IServiceBusSenderService _serviceBusSenderService;
+        public NotificationHubSender(IServiceBusSenderService serviceBusSenderService, IAzureNotificationHubService azureNotificationHubService)
         {
-            _cosmosContainerService = cosmosContainerService;
             _azureNotificationHubService = azureNotificationHubService;
+            _serviceBusSenderService = serviceBusSenderService;
         }
+
+        [FunctionName("ProcessMultipleMessagesTrigger")]
+        public async Task<IActionResult> ProcessMultipleMessagesTrigger(
+            [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "api/notifications")]
+            HttpRequest req,
+            ILogger log
+        )
+        {
+            // initalise the response object
+            ServiceResponse<MessageCount> serviceResponse = new ServiceResponse<MessageCount>() { Data = null, Message = null, Status = 200, Success = true };
+            // get the api key value from env
+            string apiKey = Environment.GetEnvironmentVariable("HTTPTRIGGER-API-KEY");
+            // get the corresponding header if it was sent
+            string apiKeyHeader = req.Headers["x-api-key"];
+            // if there is no api key header or api key does not match then return 401
+            if (apiKeyHeader == null || apiKeyHeader != apiKey) { 
+                log.LogError("Api key is invalid");
+                ObjectResult unauthorisedResponse = new ObjectResult("Unauthorized");
+                unauthorisedResponse.StatusCode = StatusCodes.Status401Unauthorized;
+                return unauthorisedResponse;
+            }
+            log.LogInformation("api key matches");
+            // if the user is authorised then check the incoming data
+            // use the helper to validate the body
+            InputRequestBody<ProcessMultipleMessagesDto> inputRequestBody = await ValidateRequestBodyHelper.ValidateBodyAsync<ProcessMultipleMessagesDto>(req, log);
+            // now check the validity of the incoming data
+            if (!inputRequestBody.IsValid) {
+                log.LogError("Request body is not valid");
+                // attach the corresponding data to our response object
+                serviceResponse.Status = 422;
+                serviceResponse.Success = false;
+                serviceResponse.Message = $"Model is invalid: {string.Join(", ", inputRequestBody.ValidationResults.Select(s => s.ErrorMessage).ToArray())}";
+                // send our response object inside the ObjectResult
+                ObjectResult unprocessableEntitiyResponse = new ObjectResult(serviceResponse);
+                unprocessableEntitiyResponse.StatusCode = StatusCodes.Status422UnprocessableEntity;
+                return unprocessableEntitiyResponse;
+            }
+            log.LogInformation("request body passed validation");
+            // NOTE: at this point we still need to validate both 'tags' and 'platforms' array
+            // however if 'tags' contains no valid tag we can simply not send the notification
+            // if 'platforms' contains no platforms or contains platforms different from 'apns' or 'fcm' then we do not send the notification
+            // however we should track how many invalid messages there are and send back the info
+            int totalMessages = 0;
+            int invalidMessages = 0;
+            // prepare a list of strings that will hold all stringified messages
+            List<string> queueMessages = new List<string>();
+            // iterate all messages
+            foreach(NotificationHubMessageDto nhmessage in inputRequestBody.Value.Messages) {
+                // validate tags and platforms before sending the message
+                bool isPlatformsValid = false;
+                bool isTagsValid = false;
+                // check that tags has at least one tag
+                if (nhmessage.Tags.Length > 0) { isTagsValid = true; }
+                // check that platforms has at least one valid platform
+                foreach(string platform in nhmessage.Platforms) { 
+                    if (platform == "apns" || platform == "fcm") { isPlatformsValid = true; }
+                }
+                // finally if both flags are true we can proceed by stringifying the message and push it to the message array
+                if (isPlatformsValid && isTagsValid) {
+                    // serialise the message to string
+                    string nhmessageString = JsonConvert.SerializeObject(nhmessage);
+                    // add the message to queueMessages
+                    queueMessages.Add(nhmessageString);
+                } else { invalidMessages +=1; }
+
+                totalMessages += 1;
+            }
+            // now that we have the counters we can prepare the MessageCount object to attach to our response
+            MessageCount messageCount = new MessageCount() { TotalMessages = totalMessages, InvalidMessages = invalidMessages };
+            // attach message count whether everything went well or not
+            serviceResponse.Data = messageCount;
+            // if there is at least one valid message then use the helper and send it to the queue
+            if (queueMessages.Count() > 0) {
+                // define the upper limit of the delay - this will make sure that messages are going in the queue with different delays
+                // this will help ease the load on the function when we have hundreds/thousands of messages
+                int delayUpperLimit = 10;
+                // for every 500 messages raise delayUpperLimit by 15
+                int multiplicator = Convert.ToInt32(queueMessages.Count / 500);
+                // if multiplicator is bigger than 0 we have more than 500 messages so we need to add a delay based on the value of multiplicator
+                delayUpperLimit += (multiplicator * 15);
+                // send a message on the postpreview queue to update the user document with the new post preview
+                HelperResponse responseQueue = await MessageSenderHelper.SendMessageBatchAsync(
+                    sender: _serviceBusSenderService.pushNotificationSender,
+                    messages: queueMessages,
+                    delayUpperLimit: delayUpperLimit
+                );
+                // check if enqueuing failed
+                if (responseQueue.Success == false) {
+                    serviceResponse.Status = 500;
+                    serviceResponse.Success = false;
+                    serviceResponse.Message = $"Error while enqueuing messages on Azure ServiceBus queue {Environment.GetEnvironmentVariable("QUEUE_NOTIFICATION")}";
+                    // send our response object inside the ObjectResult
+                    ObjectResult serverErrorResponse = new ObjectResult(serviceResponse);
+                    serverErrorResponse.StatusCode = StatusCodes.Status500InternalServerError;
+                    return serverErrorResponse;
+                }
+            }
+            // if everything went well we will end up here
+            // NOTE: we considere a "positive" case even the one where we receive no messages OR all invalid messages
+            // by returning counts we let the client know about that
+            // return response
+            return new OkObjectResult(serviceResponse);
+        }
+
         
         [FunctionName("NotificationHubSender")]
         [FixedDelayRetry(10, "00:01:00")]
-        public async Task NotificationOnPublication([ServiceBusTrigger("%QUEUE_UPLOAD_NOTIFICATION%", Connection = "SERVICE_BUS_CONNECTION_STRING")]
+        public async Task NotificationOnPublication([ServiceBusTrigger("%QUEUE_NOTIFICATION%", Connection = "SERVICE_BUS_CONNECTION_STRING")]
             string queueItem, 
             ILogger log
         )
         {
-            // These are all 'dev' user ids just for debug purposes
-            // NOTE: remove these when this app is ready for production
-            // e0a72cc2-94a7-4ba8-8c3b-9b446486108f <- Daniele
-            // c5a25167-e61e-400f-930f-52da1122749d <- Sofia
-            // 05a79036-5017-482c-92a4-992667cb516c <- Federico ?
-            // f016910f-f03b-4805-8474-8eed83713f65 <- Massimo
-            // ebbd0128-4d47-4ff2-8804-20cad9ccdb4d <- Smeraldo
-            // ff4c8dbb-e6e4-4cf4-a436-b2c04dff2cef <- Alessandro
             // Receive the message, deserialise everything
-            PublishedPostMessageDto publishedPostMessageDto = JsonConvert.DeserializeObject<PublishedPostMessageDto>(queueItem);
-            // initialise a new variable just holding userId
-            Guid userId = publishedPostMessageDto.UserId;
-            // we need to make sure the user exists, since we need to know which user devices
-            UserInfo userInfo;
-            // get the document from the db
-            try {
-                userInfo = await _cosmosContainerService.userContainer.ReadItemAsync<UserInfo>(
-                    id: $"UserInfo|{userId}", 
-                    partitionKey: new PartitionKey(userId.ToString())
-                );
-            } catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) {
-                // this is here in case the document is not in our db even if the user has a userId
-                // THIS SHOULD NOT HAPPEN EVER
-                // If it ever happens just return so that the message is not re-inserted in the queue
-                Console.WriteLine("record not found");
-                return;
-            }
-            log.LogInformation($"User: {userInfo.GivenName} {userInfo.Surname}, displayName: {userInfo.ProfileSlug}, registered devices: {userInfo.UserDevices.Count()}");
-            // we need get the devices of the user from his/her document
-            List<UserDevice> devices = userInfo.UserDevices.ToList();
-            // from the devices we are interested in the pns (platform) associated to each device
-            // once we know the platform/s we can use the proper notification structure and sdk method
-            List<string> userPns = new List<string>();
-            // iterate the devices and get pns 
-            foreach (UserDevice ud in devices) {
-                if (!userPns.Contains(ud.Platform)) { 
-                    log.LogInformation($"{userInfo.ProfileSlug} has a {ud.Platform} platform");
-                    userPns.Add(ud.Platform); 
-                }
-            }
-            // the user might have multiple devices on both pns!
-            // for this reason there could be two outcomes to be checked
+            NotificationHubMessageDto nhmessage = JsonConvert.DeserializeObject<NotificationHubMessageDto>(queueItem);
+            // get the user platforms
+            string[] platforms = nhmessage.Platforms;
+            // since the user can have two platforms there could be two outcomes to be checked
             List<NotificationOutcome> outcomes = new List<NotificationOutcome>();
             // initalise the status code from notifcation hub
             HttpStatusCode status = HttpStatusCode.InternalServerError;
-            // the channel - in this case it is  the profile slug
-            string userTag = userInfo.ProfileSlug;
-            // 
-            string title = "Blinkoo says hello!";
-            string body = $"Hello {userInfo.GivenName}! Your post has been now published!";
-            log.LogInformation($"Message will be sent to channel: {userTag}");
+            // prepare the notification data
+            string[] tags = nhmessage.Tags;
+            string title = nhmessage.Title;
+            string body = nhmessage.Body;
+            log.LogInformation($"Message will be sent to channel: {tags.First()}");
             // we only need to handle: 
             // iOS -> apns
             // Android -> fcm
 
-            foreach(string pns in userPns) {
+            foreach(string pns in platforms) {
                 // for each pns of the user initialise an outcome variable
                 NotificationOutcome outcome = null;
                 // depending on the pns we need to use different sdk methods and the notification will have a different structure
@@ -120,7 +190,7 @@ namespace NotificationFunction
                         log.LogDebug(alertMessage);
                         try {
                             // send the alertMessage to iOS devices at the defined userTag
-                            outcome = await _azureNotificationHubService.notificationHub.SendAppleNativeNotificationAsync(alertMessage, userTag);
+                            outcome = await _azureNotificationHubService.notificationHub.SendAppleNativeNotificationAsync(alertMessage, tags);
                         } catch (Exception ex) {
                             log.LogError($"Error while reaching notification hub: {ex.Message}");
                             outcome = null;
@@ -156,7 +226,7 @@ namespace NotificationFunction
                         log.LogDebug(notificationMessage);
                         try {
                             // send the alertMessage to iOS devices at the defined userTag
-                            outcome = await _azureNotificationHubService.notificationHub.SendFcmNativeNotificationAsync(notificationMessage, userTag);
+                            outcome = await _azureNotificationHubService.notificationHub.SendFcmNativeNotificationAsync(notificationMessage, tags);
                         } catch (Exception ex) {
                             log.LogError($"Error while reaching notification hub: {ex.Message}");
                             outcome = null;
@@ -183,7 +253,7 @@ namespace NotificationFunction
             }
             // in case status remains as 500 then something went wrong, for this reason we should throw and retry later
             if (status != HttpStatusCode.OK) {
-                log.LogError($"Error sending notifications via Notification Hub for user {userInfo.DisplayName}");
+                log.LogError($"Error sending notifications via Notification Hub for tag {tags.First()}");
                 throw new Exception();
             }
         }
