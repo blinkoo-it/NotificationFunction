@@ -31,7 +31,7 @@ namespace NotificationFunction
 
         [FunctionName("ProcessMultipleMessagesTrigger")]
         public async Task<IActionResult> ProcessMultipleMessagesTrigger(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "api/notifications")]
+            [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "notifications")]
             HttpRequest req,
             ILogger log
         )
