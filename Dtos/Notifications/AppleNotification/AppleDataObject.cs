@@ -4,6 +4,9 @@ namespace NotificationFunction.Dtos.Notifications;
 
 public class AppleDataObject
 {
-    [JsonProperty(PropertyName = "payload")]
-    public string Payload { get; set; } = string.Empty;
+
+    [JsonProperty(PropertyName = "type")]
+    public string Type { get; set; }
+    [JsonProperty(PropertyName = "id")]
+    public string Id { get; set; }
 }

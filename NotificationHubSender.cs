@@ -39,11 +39,13 @@ namespace NotificationFunction
             // initalise the response object
             ServiceResponse<MessageCount> serviceResponse = new ServiceResponse<MessageCount>() { Data = null, Message = null, Status = 200, Success = true };
             // get the api key value from env
-            string apiKey = Environment.GetEnvironmentVariable("HTTPTRIGGER-API-KEY");
+            string apiKey = Environment.GetEnvironmentVariable("HTTPTRIGGER_API_KEY");
             // get the corresponding header if it was sent
             string apiKeyHeader = req.Headers["x-api-key"];
             // if there is no api key header or api key does not match then return 401
             if (apiKeyHeader == null || apiKeyHeader != apiKey) { 
+                log.LogError($"Input: {apiKeyHeader}");
+                log.LogError($"Match: {apiKey}");
                 log.LogError("Api key is invalid");
                 ObjectResult unauthorisedResponse = new ObjectResult("Unauthorized");
                 unauthorisedResponse.StatusCode = StatusCodes.Status401Unauthorized;
@@ -134,7 +136,7 @@ namespace NotificationFunction
 
         
         [FunctionName("NotificationHubSender")]
-        [FixedDelayRetry(10, "00:01:00")]
+        [FixedDelayRetry(10, "00:00:30")]
         public async Task NotificationOnPublication([ServiceBusTrigger("%QUEUE_NOTIFICATION%", Connection = "SERVICE_BUS_CONNECTION_STRING")]
             string queueItem, 
             ILogger log
@@ -152,6 +154,8 @@ namespace NotificationFunction
             string[] tags = nhmessage.Tags;
             string title = nhmessage.Title;
             string body = nhmessage.Body;
+            string notificationType = nhmessage.Type;
+            string notificationId = nhmessage.Id; 
             log.LogInformation($"Message will be sent to channel: {tags.First()}");
             // we only need to handle: 
             // iOS -> apns
@@ -174,23 +178,27 @@ namespace NotificationFunction
                         //             "body": <body>
                         //         }
                         //     },
-                        //     "data": {
-                        //         "payload": <anything>
-                        //     }
+                        //     "type": <type>
+                        //     "id": <id>
                         // }
                         // initialise the alert dto
                         AppleNotificationDto alertObject = new AppleNotificationDto()
                         {
-                            Apns = new AppleApnsObject() { Alert = new AppleApnsAlertObject() { Title = title, Body = body } },
-                            Data = new AppleDataObject() { Payload = "" }
+                            Aps = new AppleApnsObject() { Alert = new AppleApnsAlertObject() { Title = title, Body = body } },
+                            Type = notificationType, 
+                            Id = notificationId 
                         };
                         // stringify the alert object
                         string alertMessage = JsonConvert.SerializeObject(alertObject);
-                        // string alert = "{\"aps\":{\"alert\": {\"title\":\"Blinkoo dice ciao\",\"body\":\"ciao\"}}, \"data\": {\"payload\": \"ciao\"}}";
-                        log.LogDebug(alertMessage);
+                        log.LogWarning("Message sent on 'apns' platform");
+                        log.LogWarning(alertMessage);
+                        // now try to send the notification
                         try {
                             // send the alertMessage to iOS devices at the defined userTag
-                            outcome = await _azureNotificationHubService.notificationHub.SendAppleNativeNotificationAsync(alertMessage, tags);
+                            outcome = await _azureNotificationHubService.notificationHub.SendAppleNativeNotificationAsync(
+                                jsonPayload: alertMessage, 
+                                tags: tags
+                            );
                         } catch (Exception ex) {
                             log.LogError($"Error while reaching notification hub: {ex.Message}");
                             outcome = null;
@@ -208,25 +216,33 @@ namespace NotificationFunction
                         // {
                         //     "notification": {
                         //         "title": <title>,
-                        //         "body": <body>
+                        //         "body": <body>,
+                        //         "type": <type>,
+                        //         "id": <id>
                         //     },
                         //     "data": {
                         //         "title": <title>,
-                        //         "body": <body>
+                        //         "body": <body>,
+                        //         "type": <type>,
+                        //         "id": <id>
                         //     }
                         // }
                         AndroidNotificationDto notificationObject = new AndroidNotificationDto()
                         {
-                            Notification = new AndroidNotificationObject() { Title = title, Body = body },
-                            Data = new AndroidDataObject() { Title = title, Body = body }
+                            Notification = new AndroidNotificationObject() { Title = title, Body = body, Type = notificationType, Id = notificationId },
+                            Data = new AndroidDataObject() { Title = title, Body = body, Type = notificationType, Id = notificationId }
                         };
                         // strigify the object
                         string notificationMessage = JsonConvert.SerializeObject(notificationObject);
-                        // string notif = "{\"notification\":{\"title\":\"Blinkoo dice ciao\",\"body\":\"" + message + "\"}, \"data\" : {\"title\":\"Blinkoo dice ciao\",\"body\":\"" + message + "\"}}";
-                        log.LogDebug(notificationMessage);
+                        log.LogWarning($"Message sent on 'fcm' platform and tags {tags.First()}");
+                        log.LogWarning(notificationMessage);
+                        // send the notification
                         try {
                             // send the alertMessage to iOS devices at the defined userTag
-                            outcome = await _azureNotificationHubService.notificationHub.SendFcmNativeNotificationAsync(notificationMessage, tags);
+                            outcome = await _azureNotificationHubService.notificationHub.SendFcmNativeNotificationAsync(
+                                jsonPayload: notificationMessage, 
+                                tags: tags
+                            );
                         } catch (Exception ex) {
                             log.LogError($"Error while reaching notification hub: {ex.Message}");
                             outcome = null;
