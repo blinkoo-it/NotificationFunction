@@ -2,8 +2,8 @@ using Newtonsoft.Json;
 
 namespace NotificationFunction.Dtos.Notifications;
 
-public class AppleApnsObject
+public class AppleApsObject
 {
     [JsonProperty(PropertyName = "alert")]
-    public AppleApnsAlertObject Alert { get; set; }
+    public AppleApsAlertObject Alert { get; set; }
 }

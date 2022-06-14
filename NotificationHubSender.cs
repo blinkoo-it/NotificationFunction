@@ -154,6 +154,9 @@ namespace NotificationFunction
             string[] tags = nhmessage.Tags;
             string title = nhmessage.Title;
             string body = nhmessage.Body;
+            string campaignId = nhmessage.CampaignId;
+            Guid nid = Guid.NewGuid();
+            long sentAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             string notificationType = nhmessage.Type;
             string notificationId = nhmessage.Id; 
             log.LogInformation($"Message will be sent to channel: {tags.First()}");
@@ -178,13 +181,19 @@ namespace NotificationFunction
                         //             "body": <body>
                         //         }
                         //     },
+                        //     "nid": "027df646-c0b7-4cc7-9a81-ba8db18f019c",
+                        //     "campaignId": <campaignId>
+                        //     "sentAt": 1655195051248,
                         //     "type": <type>
                         //     "id": <id>
                         // }
                         // initialise the alert dto
                         AppleNotificationDto alertObject = new AppleNotificationDto()
                         {
-                            Aps = new AppleApnsObject() { Alert = new AppleApnsAlertObject() { Title = title, Body = body } },
+                            Aps = new AppleApsObject() { Alert = new AppleApsAlertObject() { Title = title, Body = body } },
+                            Nid = nid,
+                            CampaignId = campaignId,
+                            SentAt = sentAt,
                             Type = notificationType, 
                             Id = notificationId 
                         };
@@ -217,20 +226,44 @@ namespace NotificationFunction
                         //     "notification": {
                         //         "title": <title>,
                         //         "body": <body>,
+                        //         "nid": "027df646-c0b7-4cc7-9a81-ba8db18f019c",
+                        //         "campaignId": <campaignId>
+                        //         "sentAt": 1655195051248,
                         //         "type": <type>,
                         //         "id": <id>
                         //     },
                         //     "data": {
                         //         "title": <title>,
                         //         "body": <body>,
+                        //         "nid": "027df646-c0b7-4cc7-9a81-ba8db18f019c",
+                        //         "campaignId": <campaignId>
+                        //         "sentAt": 1655195051248,
                         //         "type": <type>,
                         //         "id": <id>
                         //     }
                         // }
                         AndroidNotificationDto notificationObject = new AndroidNotificationDto()
                         {
-                            Notification = new AndroidNotificationObject() { Title = title, Body = body, Type = notificationType, Id = notificationId },
-                            Data = new AndroidDataObject() { Title = title, Body = body, Type = notificationType, Id = notificationId }
+                            Notification = new AndroidNotificationObject() 
+                            { 
+                                Title = title, 
+                                Body = body, 
+                                Nid = nid,
+                                CampaignId = campaignId,
+                                SentAt = sentAt,
+                                Type = notificationType, 
+                                Id = notificationId 
+                            },
+                            Data = new AndroidDataObject() 
+                            { 
+                                Title = title, 
+                                Body = body, 
+                                Nid = nid,
+                                CampaignId = campaignId,
+                                SentAt = sentAt,
+                                Type = notificationType, 
+                                Id = notificationId 
+                            }
                         };
                         // strigify the object
                         string notificationMessage = JsonConvert.SerializeObject(notificationObject);
