@@ -29,6 +29,7 @@ This is the structure we expect:
     "body": string,
     "tags": string[],
     "platforms": string[],
+    "campaignId": string,
     "type": string,
     "id": string?,
 }
@@ -38,8 +39,9 @@ This is the structure we expect:
 3. `"tags"` *(mandatory)* is an array of strings which determines who will receive the push notification. **NOTE**: in our system we need to specify the `profileSlug` *(mandatory)* value of a user to send a push notification to that user. So in our case `tag` must contain the `profileSlug` value. Failing to provide the correct value for a user will result in a failure to send the notification to that user.
 4. `"platforms"` *(mandatory)* is an array of strings representing the OS of the devices of the user. **NOTE**: since our app is available only on `iOS` and `Android`, the user can have at most two differrent type of devices, hence the `platforms` array can only contain **one or two** elements. 
 For `Android` we expect to receive the string `"fcm"`, for `"iOS"` we expect to receive `"apns"`. If the user actively uses device on both platforms we expect to receive both `"apns"` and `"fcm"` in the array.
-5. `"type"` *(mandatory)* is a string representing a label that will "tell" the mobile app what action needs to be performed after receiving the push notification. It will be `"POST"` if we want to open a particular video in app. It will be `"FEED"` if we want to open a particular filtered feed (NOT YET IMPLEMENTED IN APP ATM).
-6. `"id"` *(mandatory)* is a string field its value varies depending on the `"type"` property. If `"type": "POST"` then `"id"` will be a `keyId` string corresponding to the post we want the user to visualize. If `"type": "FEED"` then `"id"` will the a string containing one or more `feedListId`. **NOTE**: in case the feed is filtered by multiple filters then always use a comma `,` to separate them inside the string. 
+5. `"campaignId"` *(mandatory)* is a string representing the campaign associated to this message. **NOTE**: this should have a value even if the message is sent to a specific user and it is not part of an actual marketing campaign.
+6. `"type"` *(mandatory)* is a string representing a label that will "tell" the mobile app what action needs to be performed after receiving the push notification. It will be `"POST"` if we want to open a particular video in app. It will be `"FEED"` if we want to open a particular filtered feed (NOT YET IMPLEMENTED IN APP ATM).
+7. `"id"` *(mandatory)* is a string field its value varies depending on the `"type"` property. If `"type": "POST"` then `"id"` will be a `keyId` string corresponding to the post we want the user to visualize. If `"type": "FEED"` then `"id"` will the a string containing one or more `feedListId`. **NOTE**: in case the feed is filtered by multiple filters then always use a comma `,` to separate them inside the string. 
 
 ## Examples
 Send a push notification to open a specific video:
@@ -49,6 +51,7 @@ Send a push notification to open a specific video:
     "body": "Ciao Daniele, abbiamo pensato che questo nuovo video possa piacerti: scopri anche tu le terme di Saturnia",
     "tags": [ "danieleguerzoni-8a01ea0a" ],
     "platforms": [ "fcm" ],
+    "campaignId": "tuscany-campaign01",
     "type": "POST",
     "id": "2802aeed962e845d48d8a44d6f3394629740b3af83e2bab54f6fc5dab3edf3f0"
 }
@@ -61,6 +64,7 @@ Send a push notification to open a filtered feed:
     "body": "Ciao Daniele, scopri le opportunita' di relax che la Toscana ha da offrirti",
     "tags": [ "danieleguerzoni-8a01ea0a" ],
     "platforms": [ "fcm" ],
+    "campaignId": "tuscany-campaign02",
     "type": "FEED",
     "id": "IT_16,THM-012"
 }

@@ -17,6 +17,9 @@ public class NotificationHubMessageDto
         [JsonProperty(PropertyName = "platforms")]
         [Required(ErrorMessage = "Platforms field is required")]
         public string[] Platforms { get; set; }
+        [JsonProperty(PropertyName = "campaignId")]
+        [Required(ErrorMessage = "CampaignId field is required")]
+        public string CampaignId { get; set; }
         [JsonProperty(PropertyName = "type")]
         [Required(ErrorMessage = "Type field is required")]
         [RegularExpression("POST|FEED", ErrorMessage = "Type field should either be 'POST' or 'FEED'")]

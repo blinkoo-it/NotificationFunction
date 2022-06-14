@@ -2,7 +2,7 @@ using System;
 using Newtonsoft.Json;
 
 namespace NotificationFunction.Dtos.Notifications;
-public class AppleApnsAlertObject
+public class AppleApsAlertObject
 {
     [JsonProperty(PropertyName = "title")]
     public string Title { get; set; } = string.Empty;
